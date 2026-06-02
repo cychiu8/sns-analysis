@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+.DS_Store
+
+# Raw per-account scraped files
+data/tedx_account_all.csv
+data/tedx_posts_all.csv
+data/tedxawaji_*.csv
+data/tedxhamamatsu_*.csv
+data/tedxkeiou_*.csv
+data/tedxkobe_*.csv
+data/tedxkyoto_*.csv
+data/tedxutokyo_*.csv
+data/tedxwasedau_*.csv
