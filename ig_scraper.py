@@ -11,6 +11,7 @@ Flow: Instaloader fetches public posts → aggregate metrics → export CSV (for
 """
 
 import csv
+import os
 import time
 import statistics
 from collections import defaultdict
@@ -18,13 +19,15 @@ import instaloader
 
 # ---------------- Config (adjust as needed) ----------------
 TARGETS = ["tedxutokyo", "tedxkyoto", "tedxkeiou", "tedxwasedau", "tedxawaji", "tedxkobe", "tedxhamamatsu"] # list of accounts to analyze
-MAX_POSTS  = 200                     # max posts to fetch (None = all); 100–200 recommended
+MAX_POSTS  = 200                    # max posts to fetch (None = all); 100–200 recommended
 LOGIN_USER  = ""              # your IG username
 SLEEP_SEC  = 2                       # seconds between posts to reduce rate-limiting risk
 SLEEP_BETWEEN_ACCOUNTS = 30 
-POSTS_CSV      = "tedx_posts_all.csv"     # All-account per-post detail
-ACCOUNT_CSV    = "tedx_account_all.csv"   # Per-account summary
-COMPARE_CSV    = "tedx_compare.csv"       # Account comparison
+DATA_DIR       = "data"
+POSTS_CSV      = f"{DATA_DIR}/tedx_posts_all.csv"
+ACCOUNT_CSV    = f"{DATA_DIR}/tedx_account_all.csv"
+COMPARE_CSV    = f"{DATA_DIR}/tedx_compare.csv"
+START_YEAR     = 2023                    # only analyze posts from this year onwards
 # -----------------------------------------------------------
 
 WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -61,6 +64,8 @@ def scrape_posts(account, profile, followers):
             break
 
         dt = post.date_local
+        if dt.year < START_YEAR:
+            break
         likes = post.likes or 0
         comments = post.comments or 0
         engagement = likes + comments
@@ -77,10 +82,14 @@ def scrape_posts(account, profile, followers):
             "weekday": WEEK[dt.weekday()],
             "hour": dt.hour,
             "type": ptype,
+            "is_pinned": post.is_pinned,
+            "mediacount": getattr(post, "mediacount", ""),
             "likes": likes,
             "comments": comments,
             "engagement": engagement,
             "video_view_count": post.video_view_count if post.is_video else "",
+            "video_play_count": getattr(post, "video_play_count", "") if post.is_video else "",
+            "video_duration": getattr(post, "video_duration", "") if post.is_video else "",
             "engagement_rate": round(engagement / followers * 100, 3) if followers else "",
             "words": len(caption),
             "hashtag_count": len(hashtags),
@@ -176,6 +185,8 @@ def write_csv(path, rows):
 
 def main():
 
+    os.makedirs(DATA_DIR, exist_ok=True)
+
     if not LOGIN_USER:
         raise ValueError("Please set LOGIN_USER to your Instagram username")
     L = instaloader.Instaloader(
@@ -207,13 +218,13 @@ def main():
             continue
 
         # Save post-level data
-        output_csv = f"{account}_posts.csv"
+        output_csv = f"{DATA_DIR}/{account}_posts.csv"
         write_csv(output_csv, rows)
         print(f"Saved {len(rows)} posts to {output_csv}")
 
         # Save account summary
         summary_rows = build_account_summary(account, profile, followers, rows)
-        summary_csv = f"{account}_summary.csv"
+        summary_csv = f"{DATA_DIR}/{account}_summary.csv"
         write_csv(summary_csv, summary_rows)
         print(f"Saved account summary to {summary_csv}")
 
@@ -231,8 +242,6 @@ def main():
     print(f"\n[1/2] All-account detail -> {POSTS_CSV} ({len(all_posts)} rows)")
     print(f"[2/2] Per-account summary -> {ACCOUNT_CSV} ({len(all_summary)} rows)")
 
-    print("\n===== Account Comparison Summary =====")
-    print(f"  {'account':<14}{'followers':>10}{'avg_eng_rate%':>15}{'posts/month':>13}")
 
 
 if __name__ == "__main__":
