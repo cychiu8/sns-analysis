@@ -164,6 +164,8 @@ def load_data(rules_hash: str = _RULES_HASH):  # noqa: ARG001
     df["dt"] = pd.to_datetime(df["datetime"], errors="coerce")
     df = df[df["dt"].dt.year >= 2023].copy()
     df["year"] = df["dt"].dt.year
+    for col in ["video_view_count", "video_play_count", "video_duration"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     df["band"] = df["hour"].apply(hour_to_band)
     df["type_jp"] = df["type"].map(TYPE_JP).fillna(df["type"])
     res = df["caption"].apply(assign_themes)
@@ -412,6 +414,163 @@ with tab2:
         f"舞台裏・チーム Reel **{_fmt(_r_ura)}%** vs 単体写真 **{_fmt(_p_ura)}%**（約 {_ratio} 倍）。"
         "既存テーマを Reel 形式に切り替えることが、最も即効性の高い平均エンゲージメント率改善策です。"
     )
+
+    st.divider()
+    st.subheader("🎬 動画指標分析（リール限定）")
+    st.caption("視聴転換率 ＝ （いいね＋コメント）÷ 再生回数 × 100。"
+               "動画を見た人のうち何%が実際に反応したかを示す指標で、数値が高いほど視聴者の心を動かすコンテンツであることを意味します。")
+    vdf = df[(df["type"] == "Reel") & df["video_view_count"].notna()].copy()
+    vdf = vdf[vdf["video_view_count"] > 0]
+
+    if vdf.empty:
+        st.info("現在の絞り込み条件に該当するリール投稿のデータがありません。")
+    else:
+        vdf["view_eng_rate"] = vdf["engagement"] / vdf["video_view_count"] * 100
+
+        ver = vdf.groupby("account")["view_eng_rate"].mean().round(2).reset_index()
+        fig_ver = px.bar(ver, x="account", y="view_eng_rate",
+                         title="アカウント別 視聴転換率（%）",
+                         color="account", color_discrete_map=acc_color_map(ver["account"]))
+        fig_ver.update_layout(showlegend=False, height=360, yaxis_title="転換率(%)")
+        st.plotly_chart(fig_ver, use_container_width=True)
+
+        _best_ver = ver.loc[ver["view_eng_rate"].idxmax()]
+        _avg_ver = round(ver["view_eng_rate"].mean(), 2)
+        st.info(
+            f"**視聴転換率** 全体平均 {_avg_ver}%。"
+            f"最高は **{_best_ver['account']}**（{_best_ver['view_eng_rate']:.2f}%）で、視聴者をいいね・コメントに転換する力が最も強い。"
+        )
+
+        theme_ver = (
+            vdf.explode("themes")
+            .groupby("themes")["view_eng_rate"]
+            .agg(転換率=("mean"), 件数=("count"))
+            .round(2)
+            .reset_index()
+        )
+        theme_ver = theme_ver[theme_ver["themes"].isin(THEME_ORDER)]
+        theme_ver["ラベル"] = theme_ver.apply(
+            lambda r: f"{r['転換率']:.2f}%（{r['件数']}件）", axis=1)
+        fig_tver = px.bar(
+            theme_ver.sort_values("転換率", ascending=False),
+            x="転換率", y="themes", orientation="h",
+            text="ラベル",
+            title="テーマ別 視聴転換率（リールのみ）",
+            color_discrete_sequence=["#b77e74"],
+            labels={"themes": "テーマ", "転換率": "転換率(%)"},
+            category_orders={"themes": theme_ver.sort_values("転換率", ascending=False)["themes"].tolist()},
+        )
+        fig_tver.update_traces(textposition="inside", insidetextanchor="middle")
+        fig_tver.update_layout(showlegend=False, height=360, xaxis_title="転換率(%)", yaxis_title="")
+        st.plotly_chart(fig_tver, use_container_width=True)
+
+        _best_theme_ver = theme_ver.loc[theme_ver["転換率"].idxmax()]
+        _worst_theme_ver = theme_ver.loc[theme_ver["転換率"].idxmin()]
+        st.info(
+            f"**テーマ別転換率インサイト** リールの転換率が最も高いテーマは "
+            f"**{_best_theme_ver['themes']}**（{_best_theme_ver['転換率']:.2f}%）、"
+            f"最も低いのは **{_worst_theme_ver['themes']}**（{_worst_theme_ver['転換率']:.2f}%）。"
+            "エンゲージメント率（いいね率）との差異に注目することで、視聴されても反応されにくいテーマを特定できます。"
+        )
+
+        dur_df = vdf.dropna(subset=["video_duration"]).copy()
+        if not dur_df.empty:
+            st.markdown("**リール尺別 パフォーマンス比較**")
+            st.caption("短尺：〜15秒　｜　中尺：15〜30秒　｜　長尺：30秒〜")
+
+            def dur_bucket(s):
+                if s <= 15:
+                    return "短尺（〜15秒）"
+                if s <= 30:
+                    return "中尺（15〜30秒）"
+                return "長尺（30秒〜）"
+
+            BUCKET_ORDER = ["短尺（〜15秒）", "中尺（15〜30秒）", "長尺（30秒〜）"]
+            dur_df["尺"] = dur_df["video_duration"].apply(dur_bucket)
+            dur_agg = (
+                dur_df.groupby("尺")
+                .agg(
+                    平均エンゲージメント率=("engagement_rate", "mean"),
+                    平均視聴転換率=("view_eng_rate", "mean"),
+                    件数=("shortcode", "count"),
+                )
+                .round(2)
+                .reindex(BUCKET_ORDER)
+                .reset_index()
+            )
+            dur_agg["ラベル"] = dur_agg["件数"].apply(lambda n: f"{n}件")
+
+            colA, colB = st.columns(2)
+            with colA:
+                fig_dur_er = px.bar(
+                    dur_agg, x="尺", y="平均エンゲージメント率", text="ラベル",
+                    title="リール尺別 平均エンゲージメント率（%）<br><sup>フォロワー全体に対する反応率</sup>",
+                    color="尺", color_discrete_sequence=PALETTE,
+                    category_orders={"尺": BUCKET_ORDER},
+                )
+                fig_dur_er.update_traces(textposition="outside")
+                fig_dur_er.update_layout(showlegend=False, height=360, yaxis_title="エンゲージメント率(%)")
+                st.plotly_chart(fig_dur_er, use_container_width=True)
+            with colB:
+                fig_dur_ver = px.bar(
+                    dur_agg, x="尺", y="平均視聴転換率", text="ラベル",
+                    title="リール尺別 視聴転換率（%）<br><sup>実際に動画を見た人に対する反応率</sup>",
+                    color="尺", color_discrete_sequence=PALETTE,
+                    category_orders={"尺": BUCKET_ORDER},
+                )
+                fig_dur_ver.update_traces(textposition="outside")
+                fig_dur_ver.update_layout(showlegend=False, height=360, yaxis_title="転換率(%)")
+                st.plotly_chart(fig_dur_ver, use_container_width=True)
+
+            _best_er_bucket = dur_agg.loc[dur_agg["平均エンゲージメント率"].idxmax()]
+            _best_ver_bucket = dur_agg.loc[dur_agg["平均視聴転換率"].idxmax()]
+            st.info(
+                f"**最適なリール尺** エンゲージメント率では **{_best_er_bucket['尺']}**"
+                f"（{_best_er_bucket['平均エンゲージメント率']:.2f}%）、"
+                f"視聴転換率では **{_best_ver_bucket['尺']}**"
+                f"（{_best_ver_bucket['平均視聴転換率']:.2f}%）が最も高い結果となっています。"
+                "長尺のエンゲージメント率が高い場合、関心の高いファン層が見ているため反応しやすい一方、"
+                "アルゴリズムで広く配信された短尺は見知らぬユーザーにも届くため率が下がりやすい傾向があります。"
+            )
+
+            # テーマ × リール尺 別 視聴転換率（%）
+            # サンプル数が少ないため非表示。データ量が増えたら with ブロックを外す。
+            # with st.expander("テーマ × リール尺 別 視聴転換率（%）【参考：サンプル数少】", expanded=False):
+            #     theme_dur = (
+            #         dur_df.explode("themes")
+            #         .groupby(["themes", "尺"])
+            #         .agg(view_eng_rate=("view_eng_rate", "mean"), 件数=("shortcode", "count"))
+            #         .round(2)
+            #         .reset_index()
+            #     )
+            #     theme_dur = theme_dur[theme_dur["themes"].isin(THEME_ORDER)]
+            #     theme_dur["ラベル"] = theme_dur.apply(
+            #         lambda r: f"{r['view_eng_rate']:.2f}%\n({int(r['件数'])}件)", axis=1)
+            #     fig_theme_dur = px.bar(
+            #         theme_dur,
+            #         x="themes", y="view_eng_rate", color="尺",
+            #         barmode="group", text="ラベル",
+            #         title="テーマ × リール尺 別 視聴転換率（%）",
+            #         category_orders={"themes": THEME_ORDER, "尺": BUCKET_ORDER},
+            #         color_discrete_sequence=PALETTE,
+            #         labels={"themes": "テーマ", "view_eng_rate": "転換率(%)", "尺": "リール尺"},
+            #         hover_data={"件数": True},
+            #     )
+            #     fig_theme_dur.update_traces(textposition="outside")
+            #     fig_theme_dur.update_layout(height=440, xaxis_title="", yaxis_title="転換率(%)")
+            #     st.plotly_chart(fig_theme_dur, use_container_width=True)
+            #     _td = theme_dur[theme_dur["件数"] >= 3]
+            #     if not _td.empty:
+            #         _best_td = _td.loc[_td["view_eng_rate"].idxmax()]
+            #         _worst_td = _td.loc[_td["view_eng_rate"].idxmin()]
+            #         st.info(
+            #             f"**テーマ × 尺 インサイト** 件数3件以上の組み合わせの中で、"
+            #             f"視聴転換率が最も高いのは **{_best_td['themes']} × {_best_td['尺']}**"
+            #             f"（{_best_td['view_eng_rate']:.2f}%、{int(_best_td['件数'])}件）、"
+            #             f"最も低いのは **{_worst_td['themes']} × {_worst_td['尺']}**"
+            #             f"（{_worst_td['view_eng_rate']:.2f}%、{int(_worst_td['件数'])}件）。"
+            #             "件数が少ない組み合わせは平均値が不安定なため、参考値としてご覧ください。"
+            #         )
 
 # ===== Tab 3: Posting timing =====
 with tab3:
