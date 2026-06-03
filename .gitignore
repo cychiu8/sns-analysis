@@ -5,8 +5,6 @@ __pycache__/
 .venv/
 
 # Raw per-account scraped files
-data/tedx_account_all.csv
-data/tedx_posts_all.csv
 data/tedxawaji_*.csv
 data/tedxhamamatsu_*.csv
 data/tedxkeiou_*.csv

@@ -6,8 +6,8 @@ Usage:
     streamlit run app.py
 
 Data sources (place in the same folder as app.py):
-    tedx_account_all_v2.csv  (account-level summary)
-    tedx_posts_all_v2.csv    (post-level detail)
+    tedx_account_all.csv  (account-level summary)
+    tedx_posts_all.csv    (post-level detail)
 """
 
 import re
@@ -157,11 +157,12 @@ _RULES_HASH = hashlib.md5(
 
 @st.cache_data
 def load_data(rules_hash: str = _RULES_HASH):  # noqa: ARG001
-    acc = pd.read_csv("data/tedx_account_all_v2.csv")
-    posts_raw = pd.read_csv("data/tedx_posts_all_v2.csv")
+    acc = pd.read_csv("data/tedx_account_all.csv")
+    posts_raw = pd.read_csv("data/tedx_posts_all.csv")
     df = posts_raw.copy()
     df["caption"] = df["caption"].fillna("")
     df["dt"] = pd.to_datetime(df["datetime"], errors="coerce")
+    df = df[df["dt"].dt.year >= 2023].copy()
     df["year"] = df["dt"].dt.year
     df["band"] = df["hour"].apply(hour_to_band)
     df["type_jp"] = df["type"].map(TYPE_JP).fillna(df["type"])
@@ -184,7 +185,7 @@ try:
 except FileNotFoundError as e:
     st.title("📊 日本 TEDx Instagram 投稿分析")
     st.error(f"CSVファイルが見つかりません: {e}\n\n"
-             "`tedx_account_all_v2.csv` と `tedx_posts_all_v2.csv` を app.py と同じフォルダに配置してください。")
+             "`tedx_account_all.csv` と `tedx_posts_all.csv` を app.py と同じフォルダに配置してください。")
     st.stop()
 
 ov_all = overview_table(acc_df)
@@ -239,8 +240,9 @@ st.markdown(
 ov_sel = ov_all.loc[[a for a in sel_acc if a in ov_all.index]]
 top_followers_acc = ov_sel["followers"].idxmax() if "followers" in ov_sel.columns and not ov_sel["followers"].isna().all() else "—"
 top_followers_val = int(ov_sel.loc[top_followers_acc, "followers"]) if top_followers_acc != "—" else 0
-best_er_acc = ov_sel["avg_engagement_rate"].idxmax() if len(ov_sel) else "—"
-best_er_val = round(float(ov_sel.loc[best_er_acc, "avg_engagement_rate"]), 2) if best_er_acc != "—" else 0.0
+_er_by_acc = df.groupby("account")["engagement_rate"].mean()
+best_er_acc = _er_by_acc.idxmax() if len(_er_by_acc) else "—"
+best_er_val = round(float(_er_by_acc.loc[best_er_acc]), 2) if best_er_acc != "—" else 0.0
 top_theme = expl["theme"].value_counts().idxmax()
 acc_list_str = "、".join(sorted(df["account"].unique()))
 _expl_no_other = expl[expl["theme"] != "その他"]
