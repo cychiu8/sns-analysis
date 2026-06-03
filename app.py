@@ -204,6 +204,14 @@ if st.sidebar.button("🔄 フィルターをリセット", use_container_width=
     st.session_state.filter_v += 1
 
 _v = st.session_state.filter_v
+
+with st.sidebar.expander("📋 更新履歴", expanded=False):
+    st.caption(
+        "**最新版** 2025-06-03  \n"
+        "- 分析対象を2023年以降に限定  \n"
+        "- リール動画指標追加（視聴転換率・尺別分析）"
+    )
+
 accounts = sorted(posts_all["account"].unique())
 sel_acc = st.sidebar.multiselect("アカウント", accounts, default=accounts, key=f"sel_acc_{_v}")
 types = list(posts_all["type"].unique())
