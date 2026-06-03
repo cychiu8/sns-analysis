@@ -11,6 +11,8 @@ Data sources (place in the same folder as app.py):
 """
 
 import re
+import hashlib
+import json
 import collections
 import pandas as pd
 import plotly.express as px
@@ -18,22 +20,24 @@ import streamlit as st
 
 st.set_page_config(page_title="TEDx Instagram 分析", page_icon="📊", layout="wide")
 
-TED_RED = "#EB0028"
+TED_RED = "#c22d0e"
 HIGHLIGHT_ACC = "tedxhamamatsu"
-PALETTE = ["#EB0028", "#F46A6A", "#C9A227", "#3A7CA5", "#6B8E23", "#9B59B6", "#888888"]
+PALETTE = ["#c22d0e", "#772315", "#b77e74", "#ecbca4", "#dac1bd", "#492822", "#888888"]
+TYPE_PALETTE = {"リール": "#c22d0e", "カルーセル": "#b77e74", "写真": "#dac1bd"}
 WD_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 WD_JP = {"Mon": "月曜日", "Tue": "火曜日", "Wed": "水曜日", "Thu": "木曜日",
          "Fri": "金曜日", "Sat": "土曜日", "Sun": "日曜日"}
 TYPE_JP = {"Reel": "リール", "GraphSidecar": "カルーセル", "photo": "写真"}
 BAND_ORDER = ["朝（05-10）", "昼（11-13）", "午後（14-17）", "夜（18-21）", "深夜（22-04）"]
-THEME_ORDER = ["応募・募集", "スピーカー紹介", "理念・メッセージ", "舞台裏・チーム", "イベント回顧", "その他"]
+THEME_ORDER = ["スタッフ・メンバー募集", "チケット・参加申込", "スピーカー紹介", "理念・メッセージ", "舞台裏・チーム", "イベント回顧", "その他"]
 
 RULES = {
-    "応募・募集": {"スタッフ募集": 5, "ボランティア": 4, "オーディション": 5, "公募": 5,
-              "応募": 4, "募集": 4, "エントリー": 4, "参加申": 4, "申し込み": 2, "申込": 2,
-              "チケット": 2, "ticket": 2, "register": 3, "お申し込み": 2, "登壇者公募": 5,
-              "スピーカー募集": 5, "参加者募集": 5, "受付": 2, "購入": 2, "先着": 3,
-              "抽選": 3, "apply": 3, "recruit": 4, "説明会": 3},
+    "スタッフ・メンバー募集": {"スタッフ募集": 5, "ボランティア": 4, "オーディション": 5, "公募": 5,
+              "応募": 4, "募集": 4, "エントリー": 4, "登壇者公募": 5,
+              "スピーカー募集": 5, "参加者募集": 5, "apply": 3, "recruit": 4, "説明会": 3},
+    "チケット・参加申込": {"チケット": 4, "ticket": 4, "register": 3, "お申し込み": 3,
+              "申し込み": 3, "申込": 3, "参加申": 3, "受付": 3, "購入": 3,
+              "先着": 4, "抽選": 4},
     "スピーカー紹介": {"スピーカー紹介": 6, "登壇者紹介": 6, "speaker reveal": 6, "スピーカー公開": 5,
               "トーク紹介": 5, "登壇": 3, "speaker": 3, "スピーカー": 2, "プロフィール": 2,
               "語っていただ": 3, "トークを": 2, "本イベントにて": 2, "reveal": 3,
@@ -56,7 +60,7 @@ RULES = {
               "mission": 4, "vision": 3, "セッション": 2, "session": 2, "視点": 2,
               "世界を動かす": 4, "開催決定": 2},
 }
-PRIORITY = ["応募・募集", "スピーカー紹介", "イベント回顧", "舞台裏・チーム", "理念・メッセージ"]
+PRIORITY = ["スタッフ・メンバー募集", "チケット・参加申込", "スピーカー紹介", "イベント回顧", "舞台裏・チーム", "理念・メッセージ"]
 MULTI_THRESHOLD = 3
 
 EMOJI_RE = re.compile(
@@ -147,8 +151,12 @@ def highlight_row(styler):
 # ----------------------------------------------------------------------
 # Data loading and preprocessing
 # ----------------------------------------------------------------------
+_RULES_HASH = hashlib.md5(
+    json.dumps(RULES, sort_keys=True, ensure_ascii=False).encode()
+).hexdigest()[:8]
+
 @st.cache_data
-def load_data():
+def load_data(rules_hash: str = _RULES_HASH):  # noqa: ARG001
     acc = pd.read_csv("data/tedx_account_all_v2.csv")
     posts_raw = pd.read_csv("data/tedx_posts_all_v2.csv")
     df = posts_raw.copy()
@@ -185,20 +193,22 @@ ov_all = overview_table(acc_df)
 # Sidebar — filters only
 # ----------------------------------------------------------------------
 st.sidebar.header("⚙️ 絞り込み")
-st.sidebar.markdown(
-    f"<div style='background:#fff0f0;border-left:4px solid {TED_RED};"
-    f"padding:8px 10px;border-radius:4px;margin-bottom:8px'>",
-    f"</div>",
-    unsafe_allow_html=True)
 
+if "filter_v" not in st.session_state:
+    st.session_state.filter_v = 0
+
+if st.sidebar.button("🔄 フィルターをリセット", use_container_width=True):
+    st.session_state.filter_v += 1
+
+_v = st.session_state.filter_v
 accounts = sorted(posts_all["account"].unique())
-sel_acc = st.sidebar.multiselect("アカウント", accounts, default=accounts)
+sel_acc = st.sidebar.multiselect("アカウント", accounts, default=accounts, key=f"sel_acc_{_v}")
 types = list(posts_all["type"].unique())
 sel_type = st.sidebar.multiselect("投稿タイプ", types, default=types,
-                                  format_func=lambda t: TYPE_JP.get(t, t))
-sel_theme = st.sidebar.multiselect("コンテンツテーマ", THEME_ORDER, default=THEME_ORDER)
+                                  format_func=lambda t: TYPE_JP.get(t, t), key=f"sel_type_{_v}")
+sel_theme = st.sidebar.multiselect("コンテンツテーマ", THEME_ORDER, default=THEME_ORDER, key=f"sel_theme_{_v}")
 min_d, max_d = posts_all["dt"].min().date(), posts_all["dt"].max().date()
-date_range = st.sidebar.date_input("期間", (min_d, max_d), min_value=min_d, max_value=max_d)
+date_range = st.sidebar.date_input("期間", (min_d, max_d), min_value=min_d, max_value=max_d, key=f"date_range_{_v}")
 
 # Apply filters
 df = posts_all[posts_all["account"].isin(sel_acc) & posts_all["type"].isin(sel_type)].copy()
@@ -227,16 +237,42 @@ st.markdown(
 # KPI cards
 # ----------------------------------------------------------------------
 ov_sel = ov_all.loc[[a for a in sel_acc if a in ov_all.index]]
-tot_followers = int(ov_sel["followers"].sum()) if "followers" in ov_sel else 0
+top_followers_acc = ov_sel["followers"].idxmax() if "followers" in ov_sel.columns and not ov_sel["followers"].isna().all() else "—"
+top_followers_val = int(ov_sel.loc[top_followers_acc, "followers"]) if top_followers_acc != "—" else 0
 best_er_acc = ov_sel["avg_engagement_rate"].idxmax() if len(ov_sel) else "—"
+best_er_val = round(float(ov_sel.loc[best_er_acc, "avg_engagement_rate"]), 2) if best_er_acc != "—" else 0.0
 top_theme = expl["theme"].value_counts().idxmax()
+acc_list_str = "、".join(sorted(df["account"].unique()))
+_expl_no_other = expl[expl["theme"] != "その他"]
+best_er_theme = _expl_no_other.groupby("theme")["engagement_rate"].mean().idxmax() if len(_expl_no_other) > 0 else "—"
+best_er_theme_val = round(_expl_no_other.groupby("theme")["engagement_rate"].mean().max(), 2) if len(_expl_no_other) > 0 else 0.0
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("対象アカウント数", f"{df['account'].nunique()} 個")
-c2.metric("投稿数", f"{len(df):,}")
-c3.metric("合計フォロワー数", f"{tot_followers:,}")
-c4.metric("平均エンゲージメント率", f"{df['engagement_rate'].mean():.2f}%")
-c5.metric("最多テーマ", top_theme)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("対象アカウント数", f"{df['account'].nunique()} 個", help=acc_list_str)
+c2.markdown(
+    f"<div style='font-size:0.875rem;color:#555'>最多フォロワーアカウント</div>"
+    f"<div style='font-size:1.5rem;font-weight:700;line-height:1.3'>{top_followers_acc}</div>"
+    f"<div style='font-size:0.875rem;color:#555'>{top_followers_val:,} フォロワー</div>",
+    unsafe_allow_html=True,
+)
+c3.metric("平均エンゲージメント率", f"{df['engagement_rate'].mean():.2f}%")
+c4.markdown(
+    f"<div style='font-size:0.875rem;color:#555'>平均エンゲージメント率最高アカウント</div>"
+    f"<div style='font-size:1.5rem;font-weight:700;line-height:1.3'>{best_er_acc}</div>"
+    f"<div style='font-size:0.875rem;color:#555'>{best_er_val:.2f}%</div>",
+    unsafe_allow_html=True,
+)
+c5.markdown(
+    f"<div style='font-size:0.875rem;color:#555'>最多テーマ</div>"
+    f"<div style='font-size:1.5rem;font-weight:700;line-height:1.3;word-break:break-all'>{top_theme}</div>",
+    unsafe_allow_html=True,
+)
+c6.markdown(
+    f"<div style='font-size:0.875rem;color:#555'>平均エンゲージメント率最高テーマ</div>"
+    f"<div style='font-size:1.5rem;font-weight:700;line-height:1.3;word-break:break-all'>{best_er_theme}</div>"
+    f"<div style='font-size:0.875rem;color:#555'>{best_er_theme_val:.2f}%</div>",
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
@@ -263,7 +299,8 @@ with tab1:
     g = g[["フォロワー数", "総投稿数", "投稿数", "平均いいね数", "平均コメント数",
            "平均エンゲージメント", "平均エンゲージメント率"]]
     g = g.sort_values("平均エンゲージメント率", ascending=False)
-    st.dataframe(highlight_row(g.style), use_container_width=True)
+    fmt = {c: "{:.2f}" for c in ["平均いいね数", "平均コメント数", "平均エンゲージメント", "平均エンゲージメント率"]}
+    st.dataframe(highlight_row(g.style).format(fmt), use_container_width=True)
 
     colA, colB = st.columns(2)
     g_r = g.reset_index()
@@ -279,8 +316,18 @@ with tab1:
         fig.update_layout(showlegend=False, height=380)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.info("インサイト：フォロワー規模とエンゲージメント率は逆相関になりやすいです。"
-            "大規模アカウントはリーチは広いですが粘着度は低く、小規模アカウントはより活発なエンゲージメントが見られます。")
+    _top2_followers = g.dropna(subset=["フォロワー数"]).sort_values("フォロワー数", ascending=False).head(2)
+    _top2_names = "／".join(_top2_followers.index.tolist())
+    _top2_er = _top2_followers["平均エンゲージメント率"].mean()
+    _best_er_row_g = g["平均エンゲージメント率"].idxmax()
+    _best_er_val = g.loc[_best_er_row_g, "平均エンゲージメント率"]
+    _best_followers = int(g.loc[_best_er_row_g, "フォロワー数"]) if pd.notna(g.loc[_best_er_row_g, "フォロワー数"]) else "—"
+    st.info(
+        f"**インサイト①** フォロワー規模とエンゲージメント率は必ずしも比例しません。"
+        f"フォロワー最多の **{_top2_names}** の平均エンゲージメント率は **{_top2_er:.2f}%** 程度にとどまる一方、"
+        f"フォロワーが少ない **{_best_er_row_g}**（{_best_followers:,} 人）は **{_best_er_val:.2f}%** と全体最高を記録しており、"
+        "受け手との粘着度が際立って高いことを示しています。"
+    )
 
 # ===== Tab 2: Post type performance =====
 with tab2:
@@ -293,29 +340,76 @@ with tab2:
             .sort_values("平均エンゲージメント率", ascending=False))
     pt["割合(%)"] = (pt["投稿数"] / pt["投稿数"].sum() * 100).round(1)
 
+    # Row 1: ER bar | pie
     colA, colB = st.columns(2)
     with colA:
-        st.dataframe(pt[["投稿数", "割合(%)", "平均エンゲージメント率", "平均エンゲージメント"]],
-                     use_container_width=True)
-        fig = px.pie(pt.reset_index(), names="type_jp", values="投稿数",
-                     title="投稿タイプ別割合", color_discrete_sequence=PALETTE, hole=0.4)
-        fig.update_layout(height=340)
-        st.plotly_chart(fig, use_container_width=True)
-    with colB:
         fig = px.bar(pt.reset_index(), x="type_jp", y="平均エンゲージメント率",
                      title="タイプ別平均エンゲージメント率 (%)", color="type_jp",
-                     color_discrete_sequence=PALETTE)
-        fig.update_layout(showlegend=False, height=340)
+                     color_discrete_map=TYPE_PALETTE)
+        fig.update_layout(showlegend=False, height=360)
+        st.plotly_chart(fig, use_container_width=True)
+    with colB:
+        fig = px.pie(pt.reset_index(), names="type_jp", values="投稿数",
+                     title="投稿タイプ別割合", color="type_jp",
+                     color_discrete_map=TYPE_PALETTE, hole=0.4)
+        fig.update_layout(height=360)
         st.plotly_chart(fig, use_container_width=True)
 
+    # Row 2: table | リール採用率
+    colC, colD = st.columns(2)
+    with colC:
+        st.markdown("**投稿タイプ別サマリー**")
+        st.dataframe(pt[["投稿数", "割合(%)", "平均エンゲージメント率", "平均エンゲージメント"]],
+                     use_container_width=True)
+    with colD:
         reel = (df.groupby("account")["type"]
                   .apply(lambda s: (s == "Reel").mean() * 100).round(1)
                   .rename("リール採用率(%)").reset_index())
         fig2 = px.bar(reel, x="account", y="リール採用率(%)",
                       title="アカウント別 リール採用率 (%)",
                       color="account", color_discrete_map=acc_color_map(reel["account"]))
-        fig2.update_layout(showlegend=False, height=340)
+        fig2.update_layout(showlegend=False, height=320)
         st.plotly_chart(fig2, use_container_width=True)
+
+    st.subheader("テーマ × 投稿タイプ 別 平均エンゲージメント率（%）")
+    theme_type = (
+        df.explode("themes")
+        .groupby(["themes", "type_jp"])["engagement_rate"]
+        .mean()
+        .round(2)
+        .reset_index()
+    )
+    theme_type = theme_type[theme_type["themes"].isin(THEME_ORDER)]
+    fig_tt = px.bar(
+        theme_type,
+        x="themes", y="engagement_rate", color="type_jp",
+        barmode="group",
+        text="engagement_rate",
+        title="テーマ × 投稿タイプ 別 平均エンゲージメント率 (%)",
+        category_orders={"themes": THEME_ORDER, "type_jp": ["リール", "カルーセル", "写真"]},
+        color_discrete_map=TYPE_PALETTE,
+        labels={"themes": "テーマ", "engagement_rate": "エンゲージメント率(%)", "type_jp": "投稿タイプ"},
+    )
+    fig_tt.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+    fig_tt.update_layout(height=420, yaxis_title="エンゲージメント率(%)", xaxis_title="")
+    st.plotly_chart(fig_tt, use_container_width=True)
+
+    def _tt(theme, typ):
+        r = theme_type[(theme_type["themes"] == theme) & (theme_type["type_jp"] == typ)]["engagement_rate"]
+        return r.values[0] if len(r) > 0 else None
+
+    _r_riron = _tt("理念・メッセージ", "リール")
+    _p_riron = _tt("理念・メッセージ", "写真")
+    _r_ura   = _tt("舞台裏・チーム",  "リール")
+    _p_ura   = _tt("舞台裏・チーム",  "写真")
+    _ratio   = f"{_r_ura / _p_ura:.1f}" if (_r_ura and _p_ura and _p_ura > 0) else "—"
+    _fmt = lambda v: f"{v:.2f}" if v is not None else "—"
+    st.info(
+        f"**インサイト** Reel はすべてのテーマで平均エンゲージメント率を大幅に引き上げます。"
+        f"例：理念・メッセージ Reel **{_fmt(_r_riron)}%** vs 単体写真 **{_fmt(_p_riron)}%**、"
+        f"舞台裏・チーム Reel **{_fmt(_r_ura)}%** vs 単体写真 **{_fmt(_p_ura)}%**（約 {_ratio} 倍）。"
+        "既存テーマを Reel 形式に切り替えることが、最も即効性の高い平均エンゲージメント率改善策です。"
+    )
 
 # ===== Tab 3: Posting timing =====
 with tab3:
@@ -351,6 +445,26 @@ with tab3:
     fig.update_layout(height=360)
     st.plotly_chart(fig, use_container_width=True)
 
+    _best_wd = w.loc[w["engagement_rate"].idxmax()]
+    _worst_wd = w.loc[w["engagement_rate"].idxmin()]
+    _best_band = b.loc[b["engagement_rate"].idxmax()]
+    _worst_band = b.loc[b["engagement_rate"].idxmin()]
+    _pivot_raw = df.pivot_table(index="band", columns="weekday",
+                                values="engagement_rate", aggfunc="mean")
+    _peak = _pivot_raw.stack().idxmax()
+    _peak_er = _pivot_raw.stack().max()
+    _peak_band, _peak_wd = _peak
+    st.info(
+        f"**ベスト投稿タイミング** "
+        f"曜日では **{_best_wd['曜日']}**（平均 {_best_wd['engagement_rate']:.2f}%）、"
+        f"時間帯では **{_best_band['band']}**（{_best_band['engagement_rate']:.2f}%）が最も高い平均エンゲージメント率を記録。"
+        f"組み合わせのピークは **{WD_JP[_peak_wd]} × {_peak_band}**（{_peak_er:.2f}%）です。\n\n"
+        f"**避けるべきタイミング** "
+        f"**{_worst_wd['曜日']}**（{_worst_wd['engagement_rate']:.2f}%）と"
+        f"**{_worst_band['band']}**（{_worst_band['engagement_rate']:.2f}%）は他と比べて平均エンゲージメント率が低く、"
+        "投稿スケジュールの見直し余地があります。"
+    )
+
 # ===== Tab 4: Content themes =====
 with tab4:
     st.subheader("テーマ分布（複数ラベル）")
@@ -358,64 +472,185 @@ with tab4:
     mem = expl["theme"].value_counts().reindex(THEME_ORDER).fillna(0).astype(int)
     memdf = pd.DataFrame({"テーマ": mem.index, "投稿数": mem.values,
                           "全投稿に占める割合(%)": (mem.values / len(df) * 100).round(1)})
+    er_theme = expl.groupby("theme")["engagement_rate"].mean().reindex(THEME_ORDER).round(2).reset_index()
+    # 共通Y軸順序：ER昇順（上が高ER）
+    y_order = er_theme.sort_values("engagement_rate")["theme"].tolist()
+
+    memdf["ラベル"] = memdf.apply(
+        lambda r: f"{r['全投稿に占める割合(%)']:.1f}%（{r['投稿数']}件）", axis=1)
+
     colA, colB = st.columns([1.2, 1])
     with colA:
-        fig = (px.bar(memdf, x="投稿数", y="テーマ", orientation="h", text="投稿数",
-                      title="テーマ別投稿数", color_discrete_sequence=[TED_RED])
-               .update_layout(showlegend=False, height=360,
-                               yaxis={"categoryorder": "total ascending"}))
+        fig = (px.bar(memdf, x="全投稿に占める割合(%)", y="テーマ", orientation="h",
+                      text="ラベル", title="テーマ別投稿割合", color_discrete_sequence=[TED_RED])
+               .update_traces(textposition="inside", insidetextanchor="middle")
+               .update_layout(showlegend=False, height=360, xaxis_title="割合 (%)",
+                               yaxis={"categoryorder": "array", "categoryarray": y_order}))
         st.plotly_chart(fig, use_container_width=True)
     with colB:
-        er_theme = expl.groupby("theme")["engagement_rate"].mean().reindex(THEME_ORDER).round(2).reset_index()
         fig = (px.bar(er_theme, x="engagement_rate", y="theme", orientation="h",
-                      title="テーマ別平均エンゲージメント率(%)", color_discrete_sequence=["#C9A227"])
+                      title="テーマ別平均エンゲージメント率(%)", color_discrete_sequence=["#b77e74"])
                .update_layout(showlegend=False, height=360,
-                               yaxis={"categoryorder": "total ascending"},
+                               yaxis={"categoryorder": "array", "categoryarray": y_order},
                                xaxis_title="エンゲージメント率(%)", yaxis_title=""))
         st.plotly_chart(fig, use_container_width=True)
 
+    _memdf_core = memdf[memdf["テーマ"] != "その他"]
+    _best_er_row  = er_theme[er_theme["theme"] != "その他"].loc[er_theme[er_theme["theme"] != "その他"]["engagement_rate"].idxmax()]
+    _worst_er_row = er_theme[er_theme["theme"] != "その他"].loc[er_theme[er_theme["theme"] != "その他"]["engagement_rate"].idxmin()]
+    _min_post_row = _memdf_core.loc[_memdf_core["投稿数"].idxmin()]
+    _ura_pct = memdf[memdf["テーマ"] == "舞台裏・チーム"]["全投稿に占める割合(%)"].values
+    _ura_pct_str = f"{_ura_pct[0]:.0f}" if len(_ura_pct) > 0 else "—"
+    _kobe_oubo = expl[(expl["account"] == "tedxkobe") & (expl["theme"].isin(["スタッフ・メンバー募集", "チケット・参加申込"]))]
+    _kobe_total = expl[expl["account"] == "tedxkobe"]
+    _kobe_pct = f"{len(_kobe_oubo) / len(_kobe_total) * 100:.0f}" if len(_kobe_total) > 0 else "—"
+    st.info(
+        f"**インサイト①「投入少・回報高」の穴 = {_best_er_row['theme']}**　"
+        f"平均エンゲージメント率は全テーマ最高（**{_best_er_row['engagement_rate']:.2f}%**）にもかかわらず"
+        f"投稿割合は最小（**{_min_post_row['全投稿に占める割合(%)']:.0f}%**）。"
+        "回顧・成果型コンテンツは共感を得やすく、増量の余地が最も大きいテーマです。\n\n"
+        f"**インサイト②** 舞台裏・チームは投稿割合 **{_ura_pct_str}%** と多いにもかかわらず"
+        f"平均エンゲージメント率は最低（**{_worst_er_row['engagement_rate']:.2f}%**）。"
+        "主に協賛・餐飲・ブース「紹介型」投稿が大半を占め、受け手との共感が生まれにくい傾向があります。"
+    )
+
+    st.subheader("アカウント別 テーマ構成（%）")
+    theme_acc = (
+        posts_all[posts_all["account"].isin(sel_acc)]
+        .explode("themes")
+        .groupby(["account", "themes"])
+        .size()
+        .reset_index(name="件数")
+    )
+    theme_acc["割合"] = theme_acc.groupby("account")["件数"].transform(lambda x: x / x.sum() * 100).round(1)
+    theme_order_map = {t: i for i, t in enumerate(THEME_ORDER)}
+    theme_acc["theme_order"] = theme_acc["themes"].map(theme_order_map)
+    theme_acc = theme_acc.sort_values("theme_order")
+    THEME_PALETTE = {
+        "スタッフ・メンバー募集": "#772315",
+        "チケット・参加申込":   "#e05c3a",
+        "スピーカー紹介":     "#b77e74",
+        "理念・メッセージ":    "#ecbca4",
+        "舞台裏・チーム":     "#c22d0e",
+        "イベント回顧":      "#492822",
+        "その他":          "#dac1bd",
+    }
+    fig_theme = px.bar(
+        theme_acc, x="割合", y="account", color="themes", orientation="h",
+        text="割合",
+        title="アカウント別 コンテンツテーマ構成比（%）",
+        color_discrete_map=THEME_PALETTE,
+        category_orders={"themes": THEME_ORDER},
+    )
+    fig_theme.update_traces(texttemplate="%{text:.0f}%", textposition="inside", insidetextanchor="middle")
+    fig_theme.update_layout(
+        barmode="stack", height=380, showlegend=True,
+        xaxis_title="割合 (%)", yaxis_title="",
+        legend_title="テーマ",
+        xaxis=dict(range=[0, 100]),
+    )
+    st.plotly_chart(fig_theme, use_container_width=True)
+
+    _utokyo_ura = theme_acc[
+        (theme_acc["account"] == "tedxutokyo") & (theme_acc["themes"] == "舞台裏・チーム")
+    ]["割合"]
+    _utokyo_pct = f"{_utokyo_ura.values[0]:.0f}" if len(_utokyo_ura) > 0 else "—"
+    st.info(
+        "**インサイト③ アカウントごとの戦略差**　"
+        f"awaji／kyoto は理念・メッセージ重視、kobe はスタッフ募集・チケット系に偏重（**{_kobe_pct}%**）、"
+        "keiou はスピーカー予告を軸にしており、上のグラフで各アカウントの構成比を確認できます。\n\n"
+        f"**インサイト④** tedxutokyo の平均エンゲージメント率が全体最低な理由：コンテンツの **{_utokyo_pct}%** が舞台裏・チーム"
+        "（贊助／餐飲／攤位系列）に偏っており、このカテゴリは平均エンゲージメント率が最も低いため、全体平均を押し下げています。"
+    )
+
     st.divider()
-    st.subheader("テーマ別 キーワード / Emoji クラウドとトップ投稿")
+    st.subheader("テーマ別 キーワード分析とトップ投稿")
     pick = st.selectbox("テーマを選択", THEME_ORDER, index=0)
     sub = df[df["themes"].apply(lambda L: pick in L)]
     st.caption(f"「{pick}」{len(sub):,} 件　｜　平均エンゲージメント率 "
                f"{sub['engagement_rate'].mean():.2f}%　｜　平均いいね数 {sub['likes'].mean():.0f}")
 
-    k1, k2 = st.columns(2)
+    _kw_ver_key = f"kw_ver_{pick}"
+    _kw_sel_key = f"kw_selected_{pick}"
+    if _kw_ver_key not in st.session_state:
+        st.session_state[_kw_ver_key] = 0
+    if _kw_sel_key not in st.session_state:
+        st.session_state[_kw_sel_key] = None
+    _kw_ver = st.session_state[_kw_ver_key]
+
     kw = extract_keywords(sub["caption"]).most_common(30)
+    k1, k2 = st.columns(2)
+    kw_words = [w for w, _ in kw]
+
     if kw:
         kdf = pd.DataFrame(kw, columns=["キーワード", "件数"])
         fig = px.treemap(kdf, path=["キーワード"], values="件数",
-                         title=f"「{pick}」キーワードクラウド",
+                         title=f"「{pick}」キーワードクラウド（出現頻度）— タイルをクリックで投稿を表示",
                          color="件数", color_continuous_scale="Reds")
         fig.update_layout(height=400, margin=dict(t=40, l=0, r=0, b=0))
-        k1.plotly_chart(fig, use_container_width=True)
+        ev1 = k1.plotly_chart(fig, use_container_width=True,
+                               on_select="rerun", key=f"kw_freq_{pick}_{_kw_ver}")
+
+        er_rows = []
+        for word, _ in kw:
+            mask = sub["caption"].str.contains(re.escape(word), case=False, na=False)
+            er = sub.loc[mask, "engagement_rate"].mean()
+            er_rows.append({"キーワード": word, "平均ER(%)": round(er, 2)})
+        kw_er_df = pd.DataFrame(er_rows)
+        fig2 = px.treemap(kw_er_df, path=["キーワード"], values="平均ER(%)",
+                          title=f"「{pick}」キーワード別 平均エンゲージメント率(%) — タイルをクリックで投稿を表示",
+                          color="平均ER(%)", color_continuous_scale="Reds",
+                          hover_data={"平均ER(%)": ":.2f"})
+        fig2.update_layout(height=400, margin=dict(t=40, l=0, r=0, b=0))
+        ev2 = k2.plotly_chart(fig2, use_container_width=True,
+                               on_select="rerun", key=f"kw_er_{pick}_{_kw_ver}")
+
+        clicked_label = None
+        for ev in (ev1, ev2):
+            pts = (ev or {}).get("selection", {}).get("points", [])
+            if pts:
+                label = pts[0].get("label") or pts[0].get("id", "")
+                if label in kw_words:
+                    clicked_label = label
+                    break
+
+        if clicked_label:
+            if st.session_state[_kw_sel_key] == clicked_label:
+                # 同じタイルを再クリック → 選択解除してチャートをリセット
+                st.session_state[_kw_sel_key] = None
+                st.session_state[_kw_ver_key] += 1
+                st.rerun()
+            else:
+                st.session_state[_kw_sel_key] = clicked_label
     else:
         k1.info("キーワードが十分にありません。")
 
-    emo = extract_emojis(sub["caption"]).most_common(20)
-    if emo:
-        edf = pd.DataFrame(emo, columns=["emoji", "件数"])
-        fig = px.treemap(edf, path=["emoji"], values="件数",
-                         title=f"「{pick}」Emoji クラウド",
-                         color="件数", color_continuous_scale="Oranges")
-        fig.update_layout(height=400, margin=dict(t=40, l=0, r=0, b=0),
-                          uniformtext=dict(minsize=18))
-        fig.update_traces(textfont_size=26)
-        k2.plotly_chart(fig, use_container_width=True)
-    else:
-        k2.info("このテーマではEmojiの使用が少ないです。")
+    selected_kw = st.session_state.get(_kw_sel_key)
 
-    st.markdown(f"**「{pick}」トップ投稿（エンゲージメント Top 5）**")
-    best = sub.sort_values("engagement", ascending=False).head(5).copy()
-    best["日付"] = best["dt"].dt.strftime("%Y-%m-%d")
-    best["抜粋"] = best["caption"].str.replace("\n", " ", regex=False).str.slice(0, 90)
-    show = best[["account", "日付", "type_jp", "likes", "comments", "engagement",
-                 "engagement_rate", "抜粋", "url"]].rename(
-        columns={"account": "アカウント", "type_jp": "タイプ", "likes": "いいね", "comments": "コメント",
-                 "engagement": "エンゲージメント", "engagement_rate": "エンゲージメント率(%)", "url": "リンク"})
-    st.dataframe(show, use_container_width=True, hide_index=True,
-                 column_config={"リンク": st.column_config.LinkColumn("リンク")})
+    if selected_kw:
+        st.markdown(f"**「{selected_kw}」を含む投稿（平均エンゲージメント率降順 / {sub[sub['caption'].str.contains(re.escape(selected_kw), case=False, na=False)].shape[0]} 件）**")
+        mask = sub["caption"].str.contains(re.escape(selected_kw), case=False, na=False)
+        kw_posts = sub[mask].sort_values("engagement_rate", ascending=False).copy()
+        kw_posts["日付"] = kw_posts["dt"].dt.strftime("%Y-%m-%d")
+        kw_posts["抜粋"] = kw_posts["caption"].str.replace("\n", " ", regex=False).str.slice(0, 90)
+        st.dataframe(
+            kw_posts[["account", "日付", "type_jp", "likes", "comments",
+                       "engagement_rate", "抜粋", "url"]].rename(
+                columns={"account": "アカウント", "type_jp": "タイプ", "likes": "いいね",
+                         "comments": "コメント", "engagement_rate": "エンゲージメント率(%)", "url": "リンク"}),
+            use_container_width=True, hide_index=True,
+            column_config={"リンク": st.column_config.LinkColumn("リンク")})
+    else:
+        st.markdown(f"**「{pick}」トップ投稿（エンゲージメント Top 5）**")
+        best = sub.sort_values("engagement", ascending=False).head(5).copy()
+        best["日付"] = best["dt"].dt.strftime("%Y-%m-%d")
+        best["抜粋"] = best["caption"].str.replace("\n", " ", regex=False).str.slice(0, 90)
+        show = best[["account", "日付", "type_jp", "likes", "comments", "engagement",
+                     "engagement_rate", "抜粋", "url"]].rename(
+            columns={"account": "アカウント", "type_jp": "タイプ", "likes": "いいね", "comments": "コメント",
+                     "engagement": "エンゲージメント", "engagement_rate": "エンゲージメント率(%)", "url": "リンク"})
+        st.dataframe(show, use_container_width=True, hide_index=True,
+                     column_config={"リンク": st.column_config.LinkColumn("リンク")})
 
 # ===== Tab 5: Hashtags =====
 with tab5:
