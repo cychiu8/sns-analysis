@@ -19,7 +19,7 @@ import instaloader
 # ---------------- Config (adjust as needed) ----------------
 TARGETS = ["tedxutokyo", "tedxkyoto", "tedxkeiou", "tedxwasedau", "tedxawaji", "tedxkobe", "tedxhamamatsu"] # list of accounts to analyze
 MAX_POSTS  = 200                     # max posts to fetch (None = all); 100–200 recommended
-LOGIN_USER  = "cy_.321"              # your IG username
+LOGIN_USER  = ""              # your IG username
 SLEEP_SEC  = 2                       # seconds between posts to reduce rate-limiting risk
 SLEEP_BETWEEN_ACCOUNTS = 30 
 POSTS_CSV      = "tedx_posts_all.csv"     # All-account per-post detail
